@@ -236,6 +236,28 @@ def wrap(d, text, f, maxw):
         if d.textlength(cur+ch,font=f)>maxw: lines.append(cur); cur=ch
         else: cur+=ch
     return lines+[cur]
+NO_HEAD="、。，．！？!?」』）)ー…・ぁぃぅぇぉっゃゅょ"   # 行の頭に来てはいけない文字
+BREAK_AFTER="、。，．！？!?　 "                         # ここで切ると自然
+PARTICLES="はがをにでともかへやの"                       # 助詞のあとも自然
+def worry_lines(d, worry, maxw, big=30*K, small1=24*K, small2=20*K):
+    """悩みを「」付きで1行に収める。入らなければ文字を小さくし、それでも無理なら
+    自然な切れ目で2行に分ける（1文字や」だけが次の行に落ちないようにする）。"""
+    text="「"+worry.strip()+"」"
+    for fs in range(big, small1-1, -K):
+        if d.textlength(text,font=F(fs))<=maxw: return fs,[text]
+    n=len(text); best=None
+    for fs in range(big, small2-1, -K):
+        f=F(fs)
+        for i in range(3, n-2):                     # 各行に3文字以上
+            a,b=text[:i],text[i:]
+            if b[0] in NO_HEAD or a[-1]=="「": continue
+            wa,wb=d.textlength(a,font=f),d.textlength(b,font=f)
+            if max(wa,wb)>maxw: continue
+            nat=0 if a[-1] in BREAK_AFTER else (0.08 if a[-1] in PARTICLES and not b[0] in PARTICLES else 0.35)
+            cost=abs(wa-wb)/maxw+nat
+            if best is None or cost<best[0]: best=(cost,[a,b])
+        if best: return fs,best[1]
+    f=F(small2); return small2,wrap(d,text,f,maxw)[:2]
 def make(data, out, seed=None, base="."):
     CHAR_IMAGES.clear()
     # スクリプトの隣の chars/ を先に読み、JSONと同じ場所に chars/ があれば上書き
@@ -251,10 +273,13 @@ def make(data, out, seed=None, base="."):
     d.rectangle([0,0,CW-1,CH-1],outline="#f4a6b8",width=8*K)
     # 上：悩み
     d.text((28*K,22*K),"脳内メーカー",font=F(18*K),fill="#e64980")
-    f=F(30*K); wl=wrap(d,"「"+data["worry"]+"」",f,1000*K)[:2]
-    for i,l in enumerate(wl): d.text((CW/2,(48+36*i)*K),l,font=f,fill="#333",anchor="mm")
-    # 中：前と後
-    top=(48+36*len(wl))*K; crop=(30,40,575,615)
+    # 左上の「脳内メーカー」の幅を左右に空けて、その間に悩みを置く（重ならない）
+    side=28*K+d.textlength("脳内メーカー",font=F(18*K))+18*K
+    fs,wl=worry_lines(d,data["worry"],CW-2*side)
+    lh=fs*1.22; y0=48*K-(len(wl)-1)*lh*0.3
+    for i,l in enumerate(wl): d.text((CW/2,y0+i*lh),l,font=F(fs),fill="#333",anchor="mm")
+    # 中：前と後（悩みの行の下から）
+    top=int(y0+(len(wl)-1)*lh+fs/2+21*K); crop=(30,40,575,615)
     for j,(key,label) in enumerate((("before","会議の前"),("after","会議の後"))):
         p=head_panel(data[key],rnd).crop(tuple(v*K for v in crop))
         sc=(CH-top-118*K)/p.height; p=p.resize((int(p.width*sc),int(p.height*sc)),Image.LANCZOS)
