@@ -31,7 +31,7 @@ open anim/nounai-kaigi-mock-v4.html
 
 - 画面に出ている「モック（デモ用）・Grok Botでの動作は未検証」のとおり、これはデモ用の画面で、セリフは台本（案）です。
 - 動画もあります：`anim/nounai-kaigi-demo-v4.mp4`（会議のデモ、約87秒）、`anim/E_animation.mp4`（もちもち脳内ちゃんのアニメ、33秒）。
-- もちもち脳内ちゃんのアニメ（`E_animation`）の HTML 版は準備中です。今は動画だけ入っています。
+- もちもち脳内ちゃんのアニメの HTML 版：`anim/E_animation.html` をブラウザで開くだけで動きます（1ファイル）。URLの最後に `?mode=idle` を付けると、キャラが動き続ける待機画面になります。
 
 ## JSONの形
 
