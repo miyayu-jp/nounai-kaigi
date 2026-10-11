@@ -152,8 +152,14 @@ def head_panel(state, rnd, s=K):
             x,y,r=c["xy"]
             c["xy"][0]=min(max(x,bx[0]+r+24*s),bx[2]-r-24*s)
             c["xy"][1]=min(max(y,bx[1]+r+30*s),bx[3]-r-34*s)
+    q_name=(state.get("quote") or {}).get("name")
+    if q_name and not any(c["name"]==q_name for c in cs) and cs: q_name=cs[0]["name"]
     for c in sorted(cs+fixed,key=lambda c:c["xy"][1]):
         x,y,r=c["xy"]
+        if q_name and c["name"]==q_name and not c.get("chair"):   # 話しているキャラにうすい後光
+            hl=Image.new("RGBA",size,(0,0,0,0)); rgb=tuple(int(c["col"][i:i+2],16) for i in (1,3,5))
+            ImageDraw.Draw(hl).ellipse([x-r*1.35,y-r*1.35,x+r*1.35,y+r*1.35],fill=rgb+(120,))
+            L.alpha_composite(hl.filter(ImageFilter.GaussianBlur(8*s)))
         t=bot(r,c,rot=rnd.uniform(-10,10)); ox,oy=int(x-t.width/2),int(y-t.height/2); L.alpha_composite(t,(ox,oy))
         ab=t.getbbox() or (0,0,t.width,t.height); c["body"]=(ox+ab[0],oy+ab[1],ox+ab[2],oy+ab[3])
         am=Image.new("L",size,0); am.paste(t.getchannel("A").point(lambda v:255 if v>140 else 0),(ox,oy)); c["alpha"]=am
@@ -163,20 +169,23 @@ def head_panel(state, rnd, s=K):
     q=state.get("quote"); bub=None; avoid=[]
     if q:
         tgt=next((c for c in cs if c["name"]==q["name"]), cs[0]); x,y,r=tgt["xy"]; bx=mask.getbbox()
-        f=F(19*s); text=q["text"]; lines=[]; cur=""
-        for ch in text:
-            if d.textlength(cur+ch,font=f)>300*s: lines.append(cur); cur=ch
-            else: cur+=ch
-        lines.append(cur); lh=26*s; bw=max(d.textlength(l,font=f) for l in lines)+30*s; bh=lh*len(lines)+20*s
+        # 文字：日本語の切れ目で2〜3行に。入らなければ少しだけ小さくする
+        for fpx in (19,18,17,16):
+            f=F(fpx*s); lines=jp_wrap(d,q["text"],f,300*s,3)
+            if len(lines)<=3: break
+        lh=int(fpx*1.37)*s; bw=max(d.textlength(l,font=f) for l in lines)+30*s; bh=lh*len(lines)+20*s
+        # 横は話しているキャラの真上あたり、縦は脳の上
         bx0=max(40*s,min(size[0]-bw-40*s, x-bw/2)); by0=bx[1]-bh+18*s
-        bub=(tgt,x,y,r,f,lines,lh,bw,bh,bx0,by0)
+        tail=bubble_tail(cs+fixed,tgt,x,y,r,bx0,by0,bw,bh,s,size)
+        bub=(tgt,x,y,r,f,lines,lh,bw,bh,bx0,by0,tail)
         avoid.append((bx0-4*s,by0-20*s,bx0+bw+4*s,by0+bh+4*s))                 # 吹き出し
-        avoid.append((x-14*s,by0+bh,x+14*s,y-r*0.9))                            # 吹き出しのしっぽ
+        xs_=[p_[0] for p_ in tail]; ys_=[p_[1] for p_ in tail]
+        avoid.append((min(xs_)-4*s,min(ys_),max(xs_)+4*s,max(ys_)+4*s))       # 吹き出しのしっぽ（短い）
     # 名前の札：ぶつからない場所を探して、最後に描く（札どうし・ほかのキャラの体・吹き出し・脳の外を避ける）
     place_tags(cv, d, cs, fixed, avoid, mask, s)
     if bub:
-        tgt,x,y,r,f,lines,lh,bw,bh,bx0,by0=bub; dd=ImageDraw.Draw(cv)
-        dd.polygon([(x-12*s,by0+bh-2*s),(x+12*s,by0+bh-2*s),(x,y-r*0.9)],fill=tgt["col"])
+        tgt,x,y,r,f,lines,lh,bw,bh,bx0,by0,tail=bub; dd=ImageDraw.Draw(cv)
+        dd.polygon(tail,fill=tgt["col"])
         dd.rounded_rectangle([bx0,by0,bx0+bw,by0+bh],radius=16*s,fill="white",outline=tgt["col"],width=6*s)
         for i,l in enumerate(lines): dd.text((bx0+15*s,by0+10*s+i*lh),l,font=f,fill="#333")
         tag(cv,bx0+20*s+d.textlength(tgt["name"],font=F(20*s))/2,by0-4*s,tgt["name"]+"の声",tgt["col"],20*s,solid=True)
@@ -236,6 +245,72 @@ def wrap(d, text, f, maxw):
         if d.textlength(cur+ch,font=f)>maxw: lines.append(cur); cur=ch
         else: cur+=ch
     return lines+[cur]
+def bubble_tail(allc,tgt,x,y,r,bx0,by0,bw,bh,s,size):
+    """吹き出しのしっぽ：吹き出しの下から話し手の方へ向く短い三角（最大 約26px×s）。
+    ほかのキャラの体の上は通らない。話し手が遠いときは短いまま（色と「〇〇の声」で分かる）。"""
+    from PIL import ImageChops
+    W,H=size; oth=Image.new("L",(W,H),0)
+    for e in allc:
+        if e is not tgt and "alpha" in e: oth=ImageChops.lighter(oth,e["alpha"])
+    by=by0+bh-3*s; tx,ty=x,y-r*0.85
+    lo,hi=bx0+26*s,bx0+bw-26*s
+    fallback=None
+    for dx in (0,-20,20,-40,40,-60,60,-90,90,-120,120):
+        cx=min(max(x+dx*s,lo),hi)
+        for Ln in (26,20,15,11):
+            vx,vy=tx-cx,ty-by; dist=math.hypot(vx,vy) or 1
+            ln=min(Ln*s,max(6*s,dist-r*0.2)); ux,uy=vx/dist,vy/dist
+            if uy<0.35: uy=0.35; nn=math.hypot(ux,uy); ux,uy=ux/nn,uy/nn      # いつも下向き
+            w=10*s; poly=[(cx-w,by),(cx+w,by),(cx+ux*ln,by+uy*ln)]
+            if fallback is None: fallback=poly
+            m=Image.new("L",(W,H),0); ImageDraw.Draw(m).polygon(poly,fill=255)
+            if ImageChops.multiply(m,oth).getbbox() is None: return poly
+    return [(p_[0],p_[1]) for p_ in fallback[:2]]+[((fallback[0][0]+fallback[1][0])/2,by+6*s)]
+
+_KANJI=lambda c:("\u4e00"<=c<="\u9fff") or c in "々〆"
+_KATA=lambda c:("\u30a0"<=c<="\u30ff")
+_HIRA=lambda c:("\u3040"<=c<="\u309f")
+JP_NO_HEAD="、。，．！？!?」』）)ー…・ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶんン〜ゝゞ"
+JP_NO_TAIL="「『（("
+JP_PARTICLES="はがをにでともへやかねよな"
+def _brk(a,b,nxt=""):
+    """a と b の間で改行したときのコスト（小さいほど自然）。"""
+    if b in JP_NO_HEAD or a in JP_NO_TAIL: return None
+    if a in "、。，．！？!?…　 」』": return 0.0
+    if _HIRA(a) and (_KANJI(b) or _KATA(b)): return 0.15 if a in JP_PARTICLES else 0.35
+    if a in JP_PARTICLES and _HIRA(b): return 0.55
+    if (_KANJI(a) or _KATA(a)) and b=="「": return 0.3
+    if _HIRA(a) and _HIRA(b): return 1.0
+    if _KANJI(a) and _HIRA(b): return 1.6        # 送りがなの前
+    if _KANJI(a) and _KANJI(b): return 1.4
+    if _KATA(a) and _KATA(b): return 2.5         # カタカナ語の途中
+    return 0.8
+def jp_wrap(d, text, f, maxw, maxlines=3):
+    """日本語の切れ目（句読点・助詞のあと）で行を分け、行の長さもそろえる。
+    maxlines 行に入らなければ、文字単位の折り返しを返す（行数は maxlines を超えうる）。"""
+    text=text.strip(); n=len(text)
+    W=lambda a,b: d.textlength(text[a:b],font=f)
+    if W(0,n)<=maxw: return [text]
+    cuts=[i for i in range(1,n) if _brk(text[i-1],text[i]) is not None]
+    for nl in range(2,maxlines+1):
+        best=None
+        def rec(start,k,acc,cost):
+            nonlocal best
+            if k==1:
+                w=W(start,n)
+                if w>maxw: return
+                ws=[W(a,b) for a,b in zip([0]+acc,acc+[n])]
+                c=cost+(max(ws)-min(ws))/maxw*1.2
+                if best is None or c<best[0]: best=(c,acc[:])
+                return
+            for i in cuts:
+                if i<=start+1: continue
+                if W(start,i)>maxw: break
+                rec(i,k-1,acc+[i],cost+_brk(text[i-1],text[i]))
+        rec(0,nl,[],0.0)
+        if best:
+            b=[0]+best[1]+[n]; return [text[x:y] for x,y in zip(b,b[1:])]
+    return wrap(d,text,f,maxw)
 NO_HEAD="、。，．！？!?」』）)ー…・ぁぃぅぇぉっゃゅょ"   # 行の頭に来てはいけない文字
 BREAK_AFTER="、。，．！？!?　 "                         # ここで切ると自然
 PARTICLES="はがをにでともかへやの"                       # 助詞のあとも自然
@@ -297,7 +372,7 @@ def make(data, out, seed=None, base="."):
         tag(cv,bx,by+R+4*K,"その後の様子","#6d4c41",15*K)
     # 下：結論
     d.rounded_rectangle([40*K,CH-104*K,CW-40*K,CH-24*K],radius=20*K,fill="#e8708f")
-    f=F(24*K); wl=wrap(d,data.get("conclusion_label","あなたの選択")+"："+data["conclusion"],f,1060*K)[:2]
+    f=F(24*K); wl=jp_wrap(d,data.get("conclusion_label","あなたの選択")+"："+data["conclusion"],f,1060*K,2)[:2]
     for i,l in enumerate(wl): d.text((CW/2,CH-64*K+(i-(len(wl)-1)/2)*30*K),l,font=f,fill="white",anchor="mm")
     cv.convert("RGB").resize((CW//K,CH//K),Image.LANCZOS).save(out); return out
 if __name__=="__main__":
